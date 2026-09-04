@@ -26,6 +26,10 @@ MultiSerialInterface interface_manager;
     // include nrf52 bluetooth interface
     #include <helpers/nrf52/SerialBLEInterface.h>
     SerialBLEInterface bluetooth_interface;
+  #elif defined(RP2040_PLATFORM)
+    // include rp2040 bluetooth interface
+    #include <helpers/rp2040/SerialBLEInterface.h>
+    SerialBLEInterface bluetooth_interface;
   #else
     #error "SerialBLEInterface is not defined for this platform"
   #endif
@@ -39,6 +43,10 @@ MultiSerialInterface interface_manager;
   #ifdef ESP32
     // include esp32 wifi interface
     #include <helpers/esp32/SerialWifiInterface.h>
+    SerialWifiInterface wifi_interface;
+  #elif defined(RP2040_PLATFORM)
+    // include rp2040 wifi interface
+    #include <helpers/rp2040/SerialWifiInterface.h>
     SerialWifiInterface wifi_interface;
   #else
     #error "SerialWifiInterface is not defined for this platform"
@@ -108,9 +116,11 @@ void halt() {
 }
 
 /* WIFI RECONNECT TRACKERS */
+#if (defined(ESP32) || defined(RP2040_PLATFORM)) && defined(WIFI_SSID)
+  unsigned long last_wifi_reconnect_attempt = 0;
+#endif
 #if defined(ESP32) && defined(WIFI_SSID)
   bool wifi_needs_reconnect = false;
-  unsigned long last_wifi_reconnect_attempt = 0;
 #endif
 
 void setup() {
@@ -192,6 +202,7 @@ void setup() {
 
 // add wifi interface
 #ifdef WIFI_SSID
+  #ifdef ESP32
   board.setInhibitSleep(true);   // prevent sleep when WiFi is active
   WiFi.setAutoReconnect(true);
 
@@ -204,6 +215,9 @@ void setup() {
           wifi_needs_reconnect = false;
       }
   });
+  #elif defined(RP2040_PLATFORM)
+  // rp2040 WiFi has no event API; it auto-reconnects, and loop() polls as a backstop
+  #endif
 
   WiFi.begin(WIFI_SSID, WIFI_PWD);
   wifi_interface.begin(TCP_PORT);
@@ -268,6 +282,15 @@ void loop() {
     WIFI_DEBUG_PRINTLN("Attempting manual WiFi reconnect...");
     WiFi.disconnect();
     WiFi.reconnect();
+    last_wifi_reconnect_attempt = millis();
+  }
+#endif
+
+#if defined(RP2040_PLATFORM) && defined(WIFI_SSID)
+  // rp2040 has no WiFi event callbacks; poll link status and reconnect every 10 seconds
+  if (WiFi.status() != WL_CONNECTED && (millis() - last_wifi_reconnect_attempt > 10000)) {
+    WIFI_DEBUG_PRINTLN("Attempting WiFi reconnect...");
+    WiFi.begin(WIFI_SSID, WIFI_PWD);
     last_wifi_reconnect_attempt = millis();
   }
 #endif
