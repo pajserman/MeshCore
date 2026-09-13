@@ -216,10 +216,15 @@ void setup() {
       }
   });
   #elif defined(RP2040_PLATFORM)
-  // rp2040 WiFi has no event API; it auto-reconnects, and loop() polls as a backstop
+  // rp2040 WiFi has no event API; it auto-reconnects, and loop() polls as a backstop.
+  // Use the non-blocking connect so setup() does not stall the mesh/USB loop while
+  // the AP is unreachable (blocking WiFi.begin() waits up to 2x the connect timeout).
+  WiFi.beginNoBlock(WIFI_SSID, WIFI_PWD);
   #endif
 
+  #ifdef ESP32
   WiFi.begin(WIFI_SSID, WIFI_PWD);
+  #endif
   wifi_interface.begin(TCP_PORT);
   interface_manager.addInterface(InterfaceType::WiFi, &wifi_interface);
 #endif
@@ -287,10 +292,11 @@ void loop() {
 #endif
 
 #if defined(RP2040_PLATFORM) && defined(WIFI_SSID)
-  // rp2040 has no WiFi event callbacks; poll link status and reconnect every 10 seconds
+  // rp2040 has no WiFi event callbacks; poll link status and reconnect every 10 seconds.
+  // Non-blocking so a downed AP never stalls the mesh loop.
   if (WiFi.status() != WL_CONNECTED && (millis() - last_wifi_reconnect_attempt > 10000)) {
     WIFI_DEBUG_PRINTLN("Attempting WiFi reconnect...");
-    WiFi.begin(WIFI_SSID, WIFI_PWD);
+    WiFi.beginNoBlock(WIFI_SSID, WIFI_PWD);
     last_wifi_reconnect_attempt = millis();
   }
 #endif
