@@ -62,22 +62,23 @@ cd MeshCore
 
 ## 4. Configure WiFi credentials (WiFi and All builds only)
 
-The WiFi transport uses **build‑time credentials** (baked into the firmware),
-matching the existing MeshCore pattern. Edit
-[`variants/rpi_picow/platformio.ini`](variants/rpi_picow/platformio.ini) and set your
-network in the relevant environment(s):
+The WiFi transport uses **build-time credentials** embedded into the firmware.
+Set these environment variables in the shell where you run PlatformIO:
 
-```ini
-  -D WIFI_SSID='"your-network-name"'
-  -D WIFI_PWD='"your-network-password"'
+```bash
+export WIFI_SSID='your-network-name'
+export WIFI_PWD='your-network-password'
 ```
 
-- Change these in **`[env:PicoW_companion_radio_usb_wifi]`** for the WiFi build.
-- Change them in **`[env:PicoW_companion_radio_all]`** for the combined build.
-- The BLE‑only build (`PicoW_companion_radio_usb_ble`) has no WiFi settings.
+Both `PicoW_companion_radio_usb_wifi` and `PicoW_companion_radio_all` read
+these variables at build time; no tracked configuration edits are needed.
+The BLE-only build (`PicoW_companion_radio_usb_ble`) needs neither variable.
+Set both variables before building, even for an open network (`WIFI_PWD=''`).
+Rebuild and reflash to change credentials.
 
-> Keep the exact quoting: `'"value"'` (single quotes around double quotes). To change
-> the WiFi TCP port (default **5000**), add `-D TCP_PORT=xxxx` to the same env.
+To change the WiFi TCP port (default **5000**), add `-D TCP_PORT=xxxx` to the
+relevant environment in
+[`variants/rpi_picow/platformio.ini`](../variants/rpi_picow/platformio.ini).
 
 The BLE builds now use upstream's authenticated BLE implementation. The default
 pairing PIN is defined by `-D BLE_PIN_CODE=123456`.
@@ -198,7 +199,7 @@ pio run -e PicoW_companion_radio_all -t clean && pio run -e PicoW_companion_radi
 | `This library needs Bluetooth enabled` / `BTstack` errors in a WiFi‑only build | The BLE stack must stay out of non‑BLE builds. This is handled by `lib_ignore = BLE, BTstack` and per‑env source filters in the WiFi env — don't remove them. |
 | BLE builds fail without `PIO_FRAMEWORK_ARDUINO_ENABLE_BLUETOOTH` | The `usb_ble` and `all` envs must keep `-D PIO_FRAMEWORK_ARDUINO_ENABLE_BLUETOOTH`; it links the CYW43 Bluetooth stack. |
 | First build is very slow | Expected — PlatformIO downloads the Arduino‑Pico toolchain/framework once, then caches it. |
-| WiFi never connects | Check `WIFI_SSID` / `WIFI_PWD` quoting (`'"value"'`) and that the network is 2.4 GHz (the Pico W has no 5 GHz radio). |
+| WiFi never connects | Check the `WIFI_SSID` / `WIFI_PWD` environment variables used for the build and that the network is 2.4 GHz (the Pico W has no 5 GHz radio). |
 
 ---
 
@@ -210,7 +211,9 @@ python3 -m venv ~/.pio-venv
 ~/.pio-venv/bin/pip install --upgrade pip platformio
 export PATH="$HOME/.pio-venv/bin:$PATH"
 
-# From the MeshCore repo root: edit WiFi creds in variants/rpi_picow/platformio.ini, then:
+# From the MeshCore repo root:
+export WIFI_SSID='your-network-name'
+export WIFI_PWD='your-network-password'
 pio run -e PicoW_companion_radio_usb_wifi \
         -e PicoW_companion_radio_usb_ble \
         -e PicoW_companion_radio_all

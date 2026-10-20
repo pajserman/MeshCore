@@ -20,7 +20,7 @@ class SerialBLEInterface : public BaseSerialInterface, BLEService, BLEServerCall
     uint8_t buf[MAX_FRAME_SIZE];
   };
 
-  #define FRAME_QUEUE_SIZE  8
+  static constexpr int FRAME_QUEUE_SIZE = 8;
 
   Characteristic _rx;
   Characteristic _tx;
