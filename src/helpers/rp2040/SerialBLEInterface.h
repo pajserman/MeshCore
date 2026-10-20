@@ -1,74 +1,66 @@
 #pragma once
 
-#if defined(BLE_PIN_CODE)
-
 #include "../BaseSerialInterface.h"
-#include <BTstackLib.h>
+#include <BLE.h>
+#include <btstack.h>
 
-// NUS-style companion BLE interface for RP2040 / Pico W using the arduino-pico
-// bundled BTstack. Presents the same Nordic UART Service + '>'/'<'+len framing
-// as the ESP32/nRF52 implementations so existing companion apps work unchanged.
-//
-// SECURITY NOTE: BTstackLib dynamic characteristics are registered with
-// ATT_SECURITY_NONE, so this link is NOT encrypted/paired (unlike the ESP32 and
-// nRF52 builds which require MITM pairing). The pin_code argument is accepted for
-// API compatibility but not currently enforced.
-
-class SerialBLEInterface : public BaseSerialInterface {
-  bool _isEnabled;
-  volatile bool _isConnected;
+// Nordic UART service over the arduino-pico BLE library (BTstack on the CYW43).
+// Build with -D PIO_FRAMEWORK_ARDUINO_ENABLE_BLUETOOTH so the core links liblwip-bt.
+class SerialBLEInterface : public BaseSerialInterface, BLEService, BLEServerCallbacks, BLECharacteristicCallbacks {
+  // subclass only to reach the protected connection/notify state
+  struct Characteristic : public BLECharacteristic {
+    using BLECharacteristic::BLECharacteristic;
+    uint16_t valueHandle() const { return _valueHandle; }
+    uint16_t conHandle() const { return con_handle; }
+    bool notifyEnabled() const { return _notificationEnabled; }
+  };
 
   struct Frame {
     uint8_t len;
     uint8_t buf[MAX_FRAME_SIZE];
   };
 
-  #ifndef FRAME_QUEUE_SIZE
-  #define FRAME_QUEUE_SIZE  4
-  #endif
-  volatile int recv_queue_len;
-  Frame recv_queue[FRAME_QUEUE_SIZE];
-  volatile int send_queue_len;
-  Frame send_queue[FRAME_QUEUE_SIZE];
+  #define FRAME_QUEUE_SIZE  8
 
-  unsigned long _last_write;
+  Characteristic _rx;
+  Characteristic _tx;
+  bool _isEnabled;
+  bool _tx_pending;   // a can-send-now callback is registered
+  btstack_context_callback_registration_t _can_send;
+  uint8_t _scan_rsp[31];   // complete local name; BTstack keeps the pointer
+
+  uint8_t send_queue_len;
+  Frame send_queue[FRAME_QUEUE_SIZE];
+  uint8_t recv_queue_len;
+  Frame recv_queue[FRAME_QUEUE_SIZE];
 
   void clearBuffers();
+  void kickSend();
+  void sendNext();
+  static void onCanSend(void* ctx) { ((SerialBLEInterface*)ctx)->sendNext(); }
 
-  // callbacks routed from BTstack (run in the btstack background context)
-  static void onConnect(BLEStatus status, BLEDevice* device);
-  static void onDisconnect(BLEDevice* device);
-  static int  onGattWrite(uint16_t att_handle, uint8_t* buffer, uint16_t buffer_size);
-  static void onAttPacket(uint8_t packet_type, uint16_t channel, uint8_t* packet, uint16_t size);
-
-  void handleWrite(uint16_t att_handle, const uint8_t* buffer, uint16_t buffer_size);
-  void trySend();
+  // BLE library callbacks (run in the BT context)
+  void onWrite(BLECharacteristic* c) override;
+  void onConnect(BLEServer* s) override;
+  void onDisconnect(BLEServer* s) override;
 
 public:
-  SerialBLEInterface() {
-    _isEnabled = false;
-    _isConnected = false;
-    recv_queue_len = 0;
-    send_queue_len = 0;
-    _last_write = 0;
-  }
+  SerialBLEInterface();
 
   /**
    * init the BLE interface.
    * @param prefix   a prefix for the device name
-   * @param name  a name for the device (combined with prefix)
-   * @param pin_code   the BLE security pin (accepted for compatibility, not enforced)
+   * @param name  IN/OUT - a name for the device (combined with prefix). If "@@MAC", is modified and returned
+   * @param pin_code   the BLE security pin
    */
   void begin(const char* prefix, char* name, uint32_t pin_code);
 
-  // BaseSerialInterface methods
+  void disconnect();
   void enable() override;
   void disable() override;
   bool isEnabled() const override { return _isEnabled; }
-
   bool isConnected() const override;
   bool isWriteBusy() const override;
-
   size_t writeFrame(const uint8_t src[], size_t len) override;
   size_t checkRecvFrame(uint8_t dest[]) override;
 };
@@ -81,5 +73,3 @@ public:
   #define BLE_DEBUG_PRINT(...) {}
   #define BLE_DEBUG_PRINTLN(...) {}
 #endif
-
-#endif  // BLE_PIN_CODE

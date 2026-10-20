@@ -27,7 +27,7 @@ MultiSerialInterface interface_manager;
     #include <helpers/nrf52/SerialBLEInterface.h>
     SerialBLEInterface bluetooth_interface;
   #elif defined(RP2040_PLATFORM)
-    // include rp2040 bluetooth interface
+    // include rp2040 (Pico W / CYW43) bluetooth interface
     #include <helpers/rp2040/SerialBLEInterface.h>
     SerialBLEInterface bluetooth_interface;
   #else
@@ -36,17 +36,31 @@ MultiSerialInterface interface_manager;
 #endif
 
 // include wifi interface
-#ifdef WIFI_SSID
+#ifdef ENABLE_WIFI_INTERFACE
+  #ifndef WIFI_SSID
+    #define WIFI_SSID ""
+  #endif
+  #ifndef WIFI_PWD
+    #define WIFI_PWD ""
+  #endif
   #ifndef TCP_PORT
     #define TCP_PORT 5000
   #endif
-  #ifdef ESP32
-    // include esp32 wifi interface
-    #include <helpers/esp32/SerialWifiInterface.h>
-    SerialWifiInterface wifi_interface;
-  #elif defined(RP2040_PLATFORM)
-    // include rp2040 wifi interface
+  #ifndef WIFI_RETRY_INTERVAL
+    #if defined(RP2040_PLATFORM)
+      #define WIFI_RETRY_INTERVAL 30000   // each attempt blocks loop(), so retry less often
+    #else
+      #define WIFI_RETRY_INTERVAL 10000   // millis between reconnect attempts
+    #endif
+  #endif
+  #ifndef WIFI_RETRY_TIMEOUT
+    #define WIFI_RETRY_TIMEOUT 5000     // RP2040: cap on how long one join may block loop()
+  #endif
+  #if defined(RP2040_PLATFORM)
     #include <helpers/rp2040/SerialWifiInterface.h>
+    SerialWifiInterface wifi_interface;
+  #elif defined(ESP32)
+    #include <helpers/wifi/SerialWifiInterface.h>
     SerialWifiInterface wifi_interface;
   #else
     #error "SerialWifiInterface is not defined for this platform"
@@ -103,11 +117,7 @@ MultiSerialInterface interface_manager;
 
 StdRNG fast_rng;
 SimpleMeshTables tables;
-MyMesh the_mesh(radio_driver, fast_rng, rtc_clock, tables, store
-   #ifdef DISPLAY_CLASS
-      , &ui_task
-   #endif
-);
+MyMesh the_mesh(radio_driver, fast_rng, rtc_clock, tables, store);
 
 /* END GLOBAL OBJECTS */
 
@@ -116,11 +126,15 @@ void halt() {
 }
 
 /* WIFI RECONNECT TRACKERS */
-#if (defined(ESP32) || defined(RP2040_PLATFORM)) && defined(WIFI_SSID)
+#ifdef ENABLE_WIFI_INTERFACE
   unsigned long last_wifi_reconnect_attempt = 0;
-#endif
-#if defined(ESP32) && defined(WIFI_SSID)
+  #if !defined(RP2040_PLATFORM)
   bool wifi_needs_reconnect = false;
+  char wifi_ssid[33] = WIFI_SSID;   // replaced by stored prefs at boot, if set
+  char wifi_pwd[64] = WIFI_PWD;
+  bool wifi_was_connected = false;
+  bool wifi_enabled = false;   // set at boot from prefs; false also when the effective SSID is blank
+  #endif
 #endif
 
 void setup() {
@@ -163,35 +177,36 @@ void setup() {
   #endif
   #endif
   store.begin();
-  the_mesh.begin(
-    #ifdef DISPLAY_CLASS
-        disp != NULL
-    #else
-        false
-    #endif
-  );
+  the_mesh.begin();
 #elif defined(RP2040_PLATFORM)
   LittleFS.begin();
   store.begin();
-  the_mesh.begin(
-    #ifdef DISPLAY_CLASS
-        disp != NULL
-    #else
-        false
-    #endif
-  );
+  the_mesh.begin();
 #elif defined(ESP32)
   SPIFFS.begin(true);
   store.begin();
-  the_mesh.begin(
-    #ifdef DISPLAY_CLASS
-        disp != NULL
-    #else
-        false
-    #endif
-  );
+  the_mesh.begin();
 #else
   #error "need to define filesystem"
+#endif
+
+#ifdef BLE_PIN_CODE // 123456 by default
+  if (the_mesh.getNodePrefs()->ble_pin == 0) {
+#ifdef DISPLAY_CLASS
+    if (disp != NULL && BLE_PIN_CODE == 123456) {
+      StdRNG rng;
+      the_mesh.setBLEPin(rng.nextInt(100000, 999999)); // random pin each session
+    } else {
+      the_mesh.setBLEPin(BLE_PIN_CODE); // otherwise static pin
+    }
+#else
+    the_mesh.setBLEPin(BLE_PIN_CODE); // otherwise static pin
+#endif
+  } else {
+    the_mesh.setBLEPin(the_mesh.getNodePrefs()->ble_pin);
+  }
+#else
+  the_mesh.setBLEPin(0);
 #endif
 
 // add bluetooth interface
@@ -201,32 +216,45 @@ void setup() {
 #endif
 
 // add wifi interface
-#ifdef WIFI_SSID
-  #ifdef ESP32
-  board.setInhibitSleep(true);   // prevent sleep when WiFi is active
-  WiFi.setAutoReconnect(true);
-
-  WiFi.onEvent([](WiFiEvent_t event, WiFiEventInfo_t info){
-      if (event == ARDUINO_EVENT_WIFI_STA_DISCONNECTED) {
-          WIFI_DEBUG_PRINTLN("WiFi disconnected. Flagging for reconnect...");
-          wifi_needs_reconnect = true;
-      } else if (event == ARDUINO_EVENT_WIFI_STA_GOT_IP) {
-          WIFI_DEBUG_PRINTLN("WiFi connected successfully!");
-          wifi_needs_reconnect = false;
-      }
-  });
-  #elif defined(RP2040_PLATFORM)
-  // rp2040 WiFi has no event API; it auto-reconnects, and loop() polls as a backstop.
-  // Use the non-blocking connect so setup() does not stall the mesh/USB loop while
-  // the AP is unreachable (blocking WiFi.begin() waits up to 2x the connect timeout).
+#ifdef ENABLE_WIFI_INTERFACE
+#if defined(RP2040_PLATFORM)
   WiFi.beginNoBlock(WIFI_SSID, WIFI_PWD);
-  #endif
-
-  #ifdef ESP32
-  WiFi.begin(WIFI_SSID, WIFI_PWD);
-  #endif
   wifi_interface.begin(TCP_PORT);
   interface_manager.addInterface(InterfaceType::WiFi, &wifi_interface);
+#else
+  // use wifi ssid and password from prefs if ssid is not empty, otherwise use the build flag defaults
+  if (the_mesh.getNodePrefs()->wifi_ssid[0]) {
+    strcpy(wifi_ssid, the_mesh.getNodePrefs()->wifi_ssid);
+    strcpy(wifi_pwd, the_mesh.getNodePrefs()->wifi_pwd);
+  }
+  // only start wifi if enabled and ssid is not empty
+  wifi_enabled = the_mesh.getNodePrefs()->wifi_enabled;
+  if (wifi_enabled && wifi_ssid[0]) {
+#if defined(ESP32)
+    board.setInhibitSleep(true);   // prevent sleep when WiFi is active
+    WiFi.setAutoReconnect(true);
+
+    WiFi.onEvent([](WiFiEvent_t event, WiFiEventInfo_t info){
+        if (event == ARDUINO_EVENT_WIFI_STA_DISCONNECTED) {
+            WIFI_DEBUG_PRINTLN("WiFi disconnected (reason=%s). Flagging for reconnect...",
+              WiFi.disconnectReasonName((wifi_err_reason_t)info.wifi_sta_disconnected.reason));
+            wifi_needs_reconnect = true;
+        } else if (event == ARDUINO_EVENT_WIFI_STA_GOT_IP) {
+            WIFI_DEBUG_PRINTLN("WiFi connected successfully!");
+            wifi_needs_reconnect = false;
+        }
+    });
+#endif
+
+    WIFI_DEBUG_PRINTLN("connecting to %s", wifi_ssid);
+
+    WiFi.begin(wifi_ssid, wifi_pwd);
+    wifi_interface.begin(TCP_PORT);
+    interface_manager.addInterface(InterfaceType::WiFi, &wifi_interface);
+  } else {
+    WIFI_DEBUG_PRINTLN("wifi disabled");
+  }
+#endif
 #endif
 
 // add usb interface
@@ -258,6 +286,7 @@ void setup() {
 
 #ifdef DISPLAY_CLASS
   ui_task.begin(disp, &sensors, the_mesh.getNodePrefs());  // still want to pass this in as dependency, as prefs might be moved
+  the_mesh.setListener(&ui_task);
 #endif
 
   board.onBootComplete();
@@ -271,6 +300,7 @@ void loop() {
   ui_task.loop();
 #endif
   rtc_clock.tick();
+  board.loop();
 #ifdef HAS_EXTERNAL_WATCHDOG
   external_watchdog.loop();
 #endif
@@ -281,23 +311,22 @@ void loop() {
 #endif
   }
 
-#if defined(ESP32) && defined(WIFI_SSID)
-  // Safely attempt to reconnect every 10 seconds if flagged
-  if (wifi_needs_reconnect && (millis() - last_wifi_reconnect_attempt > 10000)) {
-    WIFI_DEBUG_PRINTLN("Attempting manual WiFi reconnect...");
-    WiFi.disconnect();
-    WiFi.reconnect();
-    last_wifi_reconnect_attempt = millis();
-  }
-#endif
-
-#if defined(RP2040_PLATFORM) && defined(WIFI_SSID)
-  // rp2040 has no WiFi event callbacks; poll link status and reconnect every 10 seconds.
-  // Non-blocking so a downed AP never stalls the mesh loop.
+#ifdef ENABLE_WIFI_INTERFACE
+#if defined(RP2040_PLATFORM)
   if (WiFi.status() != WL_CONNECTED && (millis() - last_wifi_reconnect_attempt > 10000)) {
     WIFI_DEBUG_PRINTLN("Attempting WiFi reconnect...");
     WiFi.beginNoBlock(WIFI_SSID, WIFI_PWD);
     last_wifi_reconnect_attempt = millis();
   }
+#else
+  if (wifi_enabled) {
+    if (wifi_needs_reconnect && (millis() - last_wifi_reconnect_attempt > WIFI_RETRY_INTERVAL)) {
+      WIFI_DEBUG_PRINTLN("Attempting manual WiFi reconnect to %s (status %d)...", wifi_ssid, WiFi.status());
+        WiFi.disconnect();
+        WiFi.reconnect();
+      last_wifi_reconnect_attempt = millis();
+    }
+  }
+#endif
 #endif
 }

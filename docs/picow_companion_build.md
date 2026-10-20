@@ -79,9 +79,8 @@ network in the relevant environment(s):
 > Keep the exact quoting: `'"value"'` (single quotes around double quotes). To change
 > the WiFi TCP port (default **5000**), add `-D TCP_PORT=xxxx` to the same env.
 
-The BLE builds use a fixed pairing pin define `-D BLE_PIN_CODE=123456`. See the
-[Security note](#8-security-notes) below — on RP2040 this pin is currently **not
-enforced**.
+The BLE builds now use upstream's authenticated BLE implementation. The default
+pairing PIN is defined by `-D BLE_PIN_CODE=123456`.
 
 ---
 
@@ -172,12 +171,9 @@ pio run -e PicoW_companion_radio_all -t upload
 
 - **WiFi credentials are compiled into the firmware.** Anyone with the `.uf2` /
   `.bin` can extract them. Don't share built binaries that contain real credentials.
-- **BLE is currently unencrypted / unpaired on the Pico W.** The RP2040 BLE interface
-  registers its Nordic UART Service characteristics with no security requirement, so
-  the `BLE_PIN_CODE` value is accepted for compatibility but **not enforced** (unlike
-  the ESP32/nRF52 builds, which require MITM passkey pairing). Any BLE client in range
-  can connect. Treat this as a functional first version and keep the device in a
-  trusted environment until pairing is added.
+- **BLE now uses upstream's authenticated passkey pairing.** Keep the configured
+  PIN private. The fork's build-time WiFi credentials and reconnect behavior are
+  retained; runtime WiFi preference changes do not override those credentials.
 
 ---
 
